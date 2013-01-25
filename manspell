@@ -1,0 +1,1153 @@
+#! /usr/bin/perl
+
+# Interaktywny skrypt do sprawdzania podrêczników ekranowych.
+
+# ***************************************************************************
+# *   Manspell v.0.18 by Pawe³ Wilk <siewca@pld.org.pl>                     *
+# *   This program is free software; you can redistribute it and/or modify  *
+# *   it under the terms of the GNU General Public License as published by  *
+# *   the Free Software Foundation; either version 2 of the License, or     *
+# *   (at your option) any later version.                                   * 
+# ***************************************************************************
+
+############################ KONFIGURACJA ##################################
+
+
+
+
+############################################################################
+# ----------------------- to czasem wymaga zmian ---------------------------
+
+# Katalog domowy. Zmieñ tylko wtedy, gdy nie masz ustawionej zmiennej
+# ¶rodowiskowej HOME.
+
+$HOMEDIR = $ENV{HOME};
+
+# ¦cie¿ka dostêpu do modu³u (katalogu) pl_DICT w CVS
+#
+$PLDICT = ".";
+
+# ¦cie¿ka dostêpu do modu³u (katalogu) pl_PL w CVS
+# Zak³adam, ¿e trzymasz repozytoria w jednym miejscu.
+#
+$PLPL = "$PLDICT/../pl_PL";
+
+# Twój adres poczty elektronicznej - ten sam, który identyfikuje ciê 
+# w pliku 'robotnicy' z modu³u pl_PL
+#
+$EMAIL = $ENV{PTM_EMAIL};	# nieczu³e na wielko¶æ liter :)
+
+# Twoje imiê i nazwisko
+# przydaje siê szczególnie, gdy nie jeste¶ t³umaczem a chcesz sprawdzaæ.
+#
+$IMIE = $ENV{PTM_NAME};
+
+# A tutaj wyci±gamy alternatywne, wzglêdne po³o¿enie.
+#
+#
+$PLALTERNATE = $ENV{PTM_DICT_DIR};
+$PLPLALTERNATE = $ENV{PTM_PL_DIR};
+
+# Podkatalogi g³ównego drzewa manuali.
+#
+@SUBMANY = ("man1", "man2", "man3", "man4", "man5", "man6", "man7", "man8", "man9", "mann");
+
+#############################################################################
+# --- tu zmiany nie s± konieczne, chyba ¿e co¶ siê bardzo pozmienia w CVS ---
+
+# Tu nazwa (bez ¶cie¿ki dostêpu) pliku zawieraj±cego nazwy i krótkie opisy
+# aktualnych i u¿ywanych s³owników z pl_DICT.
+#
+$SLOWNIKI_BAZA_CVS = "$PLDICT/aktualne.slowniki";
+
+# Tu ¶cie¿ka dostêpu do pliku z affixami znajduj±cego siê na CVS.
+#
+$AFFIX_CVS = "$PLDICT/polish.aff";
+
+# Tu ¶cie¿ka dostêpu do pliku z osobistym s³ownikiem znajduj±cym siê na CVS.
+#
+$PERSONAL_CVS = "$PLDICT/osobisty";
+
+# Tu ¶cie¿ka dostêpu do pliku z nazwami zarezerwowanych do sprawdzenia manuali 
+# znajduj±cego siê na CVS w pl_PL.
+#
+$SPRAWDZANE_CVS = "$PLPL/zasoby/ispell.sprawdzane";
+
+# Tu ¶cie¿ka do pliku robotnicy z pl_PL
+#
+$ROBOTNICY = "$PLPL/zasoby/robotnicy";
+
+# Tu ¶cie¿ka dostêpu do prywatnego katalogu ispell. 
+# Potrzebujemy go by przechowywaæ tam plik skompilowanej ju¿ bazy s³ów, 
+# któr± rozumie ispell. 
+# Uwaga: je¶li nie istnieje to jest tworzony automatycznie.
+#
+$KATALOG_ISPELL = "$HOMEDIR/.ptm-ispell"; # uwaga: bez koñcz±cego znaku uko¶nika!
+
+# Nazwa ¼ród³owego pliku qniq z CVS
+#
+$QNIQ_CVS = "$PLDICT/tools/qniq/qniq.c";
+
+# Nazwa skryptu iuniq z CVS
+#
+$IUNIQ_CVS = "$PLDICT/tools/skrypty/iuniq.pl";
+
+
+############################ KONIEC KONFIGURACJI ##############################
+
+#
+# -- poni¿sze, dodatkowe ustawienia nie wymagaj± zmian --
+#
+
+# Nazwa pliku ze skompilowanym s³ownikiem.
+#
+$GOTOWA_BAZA = "$KATALOG_ISPELL/PTM.hash";
+
+# Nazwa katalogu, w którym trzymamy informacje o modyfikacji s³owników.
+#
+$KAT_INFO = "$KATALOG_ISPELL/cvsinfo";
+
+# Nazwa katalogu z informacjami dla modu³u pre-cvs
+#
+$KAT_PRE = "$KATALOG_ISPELL/cvsinfo/pre";
+
+$KAT_INFO = "$KATALOG_ISPELL/cvsinfo";
+
+# Nazwa pliku z od³o¿onymi podrêcznikami.
+#
+$POSTPONED = "$KAT_INFO/niedokonczone";
+
+# Nazwa pliku z informacjami o s³ownikach globalnych.
+#
+$SLOWNIKI_GLOBALNE = "$KAT_INFO/nazwy_glob";
+
+# Nazwa pliku informacyjnego qniq
+#
+$QNIQ_INFO = "$KAT_INFO/INFO-qniq";
+
+# Nazwa wynikowego zbioru qniq
+#
+$QNIQ = "$KATALOG_ISPELL/qniq";
+
+# Informacja, ¿e ju¿ wykonano rekompilacjê.
+#
+$REKOMPILOWANO = 0;
+
+
+#
+# podprogramy
+#
+
+# zapamiêtuje czas modyfikacji i rozmiar podanego pliku
+# 
+sub zachowaj_zmiany {
+    local($plik, %statystyka) = @_;
+
+    open (OUTPUT, ">$plik") or die ("Nie mogê otworzyæ do zapisu $plik");
+    foreach (values (%statystyka)) {
+	print (OUTPUT "$_\n");
+	}
+    close (OUTPUT);
+}
+
+# sprawdza, czy nie zmieni³ siê s³ownik osobisty
+# je¶li tak to przeprowadza "ciche" sortowanie z wy³±czeniem powielaj±cych
+# siê elementów :) trochê stratne, ale zbyt du¿o danych to tu nie mamy, ¿eby
+# grzebaæ siê w parsowaniu oryginalnych, CVSowych plików z informacjami..
+# poza tym to mój drugi dopiero skrypt napisany w perl :>
+#
+sub check_osobisty {
+    local($katinfo, $plik) = @_;
+    local $plikinfo;
+    local %statystyka = ();
+    local $czas, $rozmiar;
+    
+    if ( ! -f $plik) {
+	    print (STDERR "S³ownik osobisty ($plik) nie istnieje,\nlub nie jest odpowiednim plikiem.\n");
+	    }
+    
+    $plikinfo = "$katinfo/INFO-osobisty";
+
+    if ( ! open (PLIKINFO, "<$plikinfo") ) {
+	    system ("cat $plik | sort | uniq > $plik.temp");
+	    unlink($plik);
+	    rename("$plik.temp" , "$plik");
+	    $statystyka{'czas'} = (stat($plik))[9];
+	    $statystyka{'rozmiar'} = (stat($plik))[7];
+	    &zachowaj_zmiany ($plikinfo, %statystyka);
+	    return (1);
+	    }
+    
+    $rozmiar = (stat($plik))[7];
+    $czas = (stat($plik))[9];
+    
+    chop ($statystyka{'czas'} = <PLIKINFO>);
+    chop ($statystyka{'rozmiar'} = <PLIKINFO>);
+    close (PLIKINFO);
+    if ($rozmiar != $statystyka{'rozmiar'} or $czas != $statystyka{'czas'}) {
+	system("cat $plik | sort | uniq > $plik.temp");
+	unlink($plik);
+	rename("$plik.temp" , "$plik");
+	$statystyka{'czas'} = (stat($plik))[9];
+	$statystyka{'rozmiar'} = (stat($plik))[7];
+	&zachowaj_zmiany ($plikinfo, %statystyka);
+	}
+}
+
+# sprawdzenie wersji i ewentualna kompilacja qniq
+#
+
+sub qniq {
+    local ($cvsqniq, $plikinfo, $qniq) = @_;
+    local $czas, $rozmiar;
+    local %statystyka = ();
+        
+    if ( ! open (PLIKINFO, "<$plikinfo") ) {
+	    print "Przygotowujê zewnêtrzny program qniq...\n";
+	    system ("gcc -O3 $cvsqniq -o$qniq && strip $qniq");
+	    $statystyka{'czas'} = (stat($cvsqniq))[9];
+	    $statystyka{'rozmiar'} = (stat($cvsqniq))[7];
+	    &zachowaj_zmiany ($plikinfo, %statystyka);
+	    return ();
+	    }
+
+    chop ($czas = <PLIKINFO>);
+    chop ($rozmiar = <PLIKINFO>);
+    close (PLIKINFO);
+    $statystyka{'czas'} = (stat($cvsqniq))[9];
+    $statystyka{'rozmiar'} = (stat($cvsqniq))[7];
+    if (! -f $qniq or $czas !=  $statystyka{'czas'} or $rozmiar != $statystyka{'rozmiar'}) {
+	    print "Odnawiam wersjê programu qniq...\n";
+	    unlink ("$qniq");
+	    system ("gcc -O3 $cvsqniq -o$qniq && strip $qniq");
+	    &zachowaj_zmiany ($plikinfo, %statystyka);
+	    }
+    
+    if (! -f $qniq) {
+	if (-f $IUNIQ_CVS) {
+	    print "Brak pliku $qniq\n";
+	    print "Nie mogê skompilowaæ qniq, u¿yjemy zastêpczego iuniq...\n";
+	    $QNIQ = $IUNIQ_CVS;
+	    }
+	else {
+	    print "Nie mogê skompilowaæ qniq, brak te¿ jego zastêpnika- u¿ywam polecenia uniq.\n";
+	    $QNIQ = "uniq";
+	    }
+	}
+}
+
+# rekompilacja bazy s³ów
+#
+
+sub rekompiluj {
+    local ($wynikowy, $afixy, $qniq, @pliczki) = @_;
+
+    if ($REKOMPILOWANO) {
+	print "powrót: Ju¿ wykonano operacjê.\n";
+	return ();
+	}
+    print "£±czê s³owniki...\n";
+    system ("cd $PLDICT ; cat @pliczki | sort | $qniq > $wynikowy.surowy");
+    print "Tworzê bazê...\n";
+    system ("buildhash -s $wynikowy.surowy $afixy $wynikowy") == 0
+	or die ("B³±d w wywo³aniu buildhash.");
+    print "Sprz±tam.\n";
+    unlink ("$wynikowy.surowy.cnt");
+    unlink ("$wynikowy.surowy.stat");
+    if ($arg ne "--rebuild-only") {
+        unlink ("$wynikowy.surowy");    
+	}
+    $REKOMPILOWANO = 1;
+}
+
+# sprawdza czy nie zmieni³ siê który¶ ze s³owników g³ównych
+# je¶li tak - rekompiluje bazê
+#
+sub check_baza {
+    local($katinfo, $moddir, $wynik, @pliki) = @_;
+    local %statystyka = ();
+    local $czas, $rozmiar, $plikinfo, $pierwsze;
+    
+    if ( ! -f $wynik ) {
+	print ("Nie odnalaz³em wynikowego pliku bazy\n -- przeprowadzê teraz czynno¶ci instalacyjne...\n");
+	$pierwsze = 1;
+	}
+    
+    foreach (@pliki) {
+	$wlplik = "$moddir/$_";
+	$plikinfo = "$katinfo/$_";
+	
+	if ( ! -f $wlplik) {
+	    print (STDERR "Plik s³ownika bazowego ($wlplik) nie istnieje,\nlub nie jest odpowiednim plikiem.\n");
+	    }
+	
+        $rozmiar = (stat($wlplik))[7];
+	$czas = (stat($wlplik))[9];
+		
+        if ( ! open (PLIKINFO, "<$plikinfo") ) {
+	    $statystyka{'czas'} = $czas;
+	    $statystyka{'rozmiar'} = $rozmiar;
+	    &zachowaj_zmiany ($plikinfo, %statystyka);
+	    open (PLIKINFO, "<$plikinfo") or die ("Nie mogê otworzyæ $plikinfo");
+	    }
+    
+	chop ($statystyka{'czas'} = <PLIKINFO>);
+	chop ($statystyka{'rozmiar'} = <PLIKINFO>);
+	close (PLIKINFO);
+    
+        if ($rozmiar != $statystyka{'rozmiar'} or $czas != $statystyka{'czas'} or $pierwsze) {
+	    if (! $pierwsze) {
+		print "S³ownik $wlplik zosta³ zmieniony.\n - rekompilacja bazy.\n";
+		}
+	    $statystyka{'rozmiar'} = $rozmiar;
+	    $statystyka{'czas'} = $czas;
+	    &rekompiluj ($wynik, $AFFIX_CVS, $QNIQ, @pliki);
+	    foreach (@pliki) {
+		$wlplik = "$moddir/$_";
+		$plikinfo = "$katinfo/$_";
+		if ( ! -f $wlplik) {
+		    print (STDERR "Plik $wlplik nie istnieje, lub nie jest odpowiednim plikiem.\n");
+		}
+		$statystyka{'czas'} = (stat($wlplik))[9];
+		$statystyka{'rozmiar'} = (stat($wlplik))[7];
+		unlink ("$plikinfo");
+		&zachowaj_zmiany ($plikinfo, %statystyka);
+		}
+	    return (1);
+	    }
+	next;
+	}
+}
+
+# £adowanie bazy s³owników.
+# Potrzebne gdy "globalnie" dodamy (ujmiemy) jaki¶ s³ownik.
+
+sub load_slowniki {
+    local ($baza) = @_;
+    local %slowniczki = ();
+    local $tymcz;
+    
+    open (PLIK, "<$baza") or die ("Nie mogê pobraæ informacji o s³ownikach z $baza");
+    while (<PLIK>) {
+	chop;
+	if (!$_ or $_ =~ /^(\#|\/|\s|\t)/) {
+	    next;
+	    }
+	#if ($_ =~ /(\w+(?=\t|\s|\/))(.*)/) {
+	if ($_ =~ /(\w+\t|\s|\/)(.*)/) {
+	    # print "$1 : $2\n";
+	    $tymcz = $1;
+	    chop ($tymcz);
+	    $slowniczki{$tymcz} = $2;
+	    }
+    }
+    close (PLIK);
+    return (%slowniczki);
+}
+
+# Sprawdzanie czy nie ma nowych s³owników.
+#
+sub check_globalne {
+    local ($plikznazwami, $kataloginfo, $wynik, $afixy, %cale) = @_;
+    local $nazwas, $nazwastara;
+    local $zmiana = 0, $braknazwy = 0, $firstnotka = 0;
+    
+    # print "Sprawdzam s³owniki...\n";
+    
+    if (! -f $plikznazwami) {
+	print "Tworzê plik informacyjny s³owników globalnych...\n";
+	system ("touch $plikznazwami");
+	}
+	
+    open (PLIK, "<$plikznazwami");
+    open (DEST, ">$plikznazwami.temp");
+    while (<PLIK>) {
+	chop;
+	if (! exists $cale{$_}) {
+	    if (! $zmiana) {
+		$zmiana = 1;
+		}
+	    if (! $firstnotka) {
+		$firstnotka = 1;
+		print "\nPoni¿sze s³owniki nie s± ju¿ u¿ywane:\n\n";
+		}
+	    print " -\t$_\n";
+	    unlink ("$kataloginfo/$_");
+	    } 
+	else {
+	    print DEST "$_\n";
+	    }
+	}
+    $firstnotka = 0;
+    foreach $nazwas (keys %cale) {
+	$braknazwy = 1;
+	seek (PLIK, 0, SEEK_SET);
+	while (<PLIK>) {
+	    chop;
+	    if ($_ eq $nazwas) {
+		$braknazwy = 0;
+		}
+	    }
+	if ($braknazwy) {
+	    if (! $zmiana) {
+		$zmiana = 1;
+		}
+	    print DEST "$nazwas\n";
+	    if (! $firstnotka) {
+		$firstnotka = 1;
+		print "\nPoni¿sze s³owniki zosta³y dodane jako globalne:\n\n";
+		}
+	    # $counterek = 
+	    print "\t$nazwas\t -> $cale{$nazwas}\n";
+	    }
+	}
+
+    close (PLIK);
+    close (DEST);
+
+    if ($zmiana) {
+	unlink ("$plikznazwami");
+	rename ("$plikznazwami.temp", "$plikznazwami");
+	print "\nWci¶nij <ENTER> po obejrzeniu notki.";
+	$zmiana = <STDIN>;
+	print "Rekompilacja bazy.\n";
+	&rekompiluj ($wynik, $afixy, $QNIQ, keys %cale);
+	print "\n";
+	}
+    else {
+	unlink ("$plikznazwami.temp");
+	}
+}
+
+# Sprawdzanie, komu przypisany jest podany plik.
+#
+sub rezerwacja {
+    local ($plikspr, $pliczek) = @_;
+    local $wlasciciel;
+        
+    open (SPRAW, "<$plikspr") or die ("Nie mogê otworzyæ $plikspr\n");
+    while (<SPRAW>) {
+	chop;
+	if ($_ =~ /\/.*\/.*\<.*\@.*\>/) {
+	    $wlasciciel = $_;
+	    next;
+	    }
+	if ($_ eq $pliczek) {
+	    return ($wlasciciel);
+	    }
+	}	
+    close (SPRAW);
+    return ();
+}
+
+# Przeszukiwanie podanego pliku pod k±tem znalezienia
+# adresu e-mail. Zwraca PTM-TAG'a.
+#
+sub ktoto {
+    local ($plikspr, $email) = @_;
+    local $wlasciciel, $tempa;
+    
+    $email =~ tr/A-Z/a-z/;
+    open (SPRAW, "<$plikspr") or die ("Nie mogê otworzyæ $plikspr\n");
+    while (<SPRAW>) {
+	chop;
+	if ($_ =~ /\/.*\/.*\<\s*(.*\@.*)\s*\>/) {
+	    $tempa = $1;
+	    $tempa =~ tr/A-Z/a-z/;
+	    if ($tempa eq $email) {
+		return ($_);
+		}
+	    } 
+	}
+    return ();
+}
+
+# Wy³uskiwanie adresu e-mail z linijki danych.
+#
+sub daj_email {
+    local($linijka) = @_;
+    local $email;
+    
+    if ($linijka =~ /\<\s*(.*\@.*)\s*\>/) {
+	return ($1);
+	}
+    return (); 
+}
+
+# Wy³uskiwanie imienia i nazwiska z linijki danych.
+#
+sub daj_nazw {
+    local($linijka) = @_;
+    local $name;
+    
+    if ($linijka =~ /\/.*\/\s*(.*)\s*\</) {
+	return ($1);
+	}
+    return (); 
+}
+
+# Rezerwacja manuala
+#
+sub dopisz {
+    local ($ptmtag, $plikdoc, $rezerwacyjny) = @_;
+    local $trafiono = 0;
+    
+    open (SORC, "<$rezerwacyjny") or die ("Nie mogê siê dobraæ do $rezerwacyjny");
+    open (PLIK, ">$rezerwacyjny.temp") or die ("Nie mogê siê dobraæ do $rezerwacyjny");
+    while (<SORC>) {
+	chop;
+	if ($_) {
+	    print PLIK "$_\n";
+	    }
+	if ($_ eq $ptmtag) {
+	    print PLIK "$plikdoc\n";
+	    $trafiono = 1;
+	    last;
+	    }
+	}
+    if (! $trafiono) {
+	print ("Nowy, nowy! :)");
+	print PLIK "$ptmtag\n$plikdoc\n";
+	}
+    while (<SORC>) {
+	if ($_ ne "\n") {
+	    print PLIK "$_";
+	    }
+	}
+    close (PLIK);
+    close (SORC);
+}
+
+# Pytanie o wprowadzenie opcji i pobranie jej.
+#
+sub wybieranie {
+    local $pob;
+    
+    print "Twój wybór: ";
+    $pob = <STDIN>;
+    chop ($pob);
+    return ($pob);
+}
+
+# Od³o¿enie podrêcznika
+#
+
+sub postpone_porecznik {
+    local ($plikodl, $jaki) = @_;
+    
+    open (PLIK, "<$plikodl") or die ("B³±d krytyczny, nie mogê sie dobraæ do $plikodl\n");
+    while (<PLIK>) {
+	chop;
+	if ($_ eq $jaki) {
+	    print "Podrêcznik by³ ju¿ wcze¶niej od³o¿ony - bez zmian.\n";
+	    close (PLIK);
+	    return ();
+	    }
+	}
+    close (PLIK);
+    open (PLIK, ">>$plikodl") or die ("Nie mogê dopisywaæ do $plikodl.\n");
+    print PLIK "$jaki\n";
+    close (PLIK);
+}
+
+# Usuniêcie podrêcznika z listy od³o¿onych.
+#
+
+sub unpostpone {
+    local ($plikodl, $jaki) = @_;
+    local $znal = 0;
+    
+    open (PLIK, "<$plikodl") or die ("B³±d krytyczny, nie mogê sie dobraæ do $plikodl\n");
+    open (DEST, ">$plikodl.temp") or die ("B³±d, nie mogê pisaæ do $plikodl.temp");
+    while (<PLIK>) {
+	chop;
+	if ($_ eq $jaki) {
+	    $znal = 1;
+	    }
+	else {
+	    print DEST "$_\n";
+	    }
+	}
+    close (DEST);
+    close (PLIK);
+    
+    if (! $znal) {
+	print "Ten podrêcznik nie by³ od³o¿ony.\n";
+	unlink ("$plikodl.temp");
+	return ();
+	}
+    unlink("$plikodl");
+    rename ("$plikodl.temp", "$plikodl");
+}
+
+# Zwraca nazwê pierwszego od³o¿onego podrêcznika.
+# Lub nazwê nie-pierwszego, je¶li zgadza siê z podan± w zmiennej $jaki.
+#
+
+sub getpostponed {
+    local ($plikodl, $jaki) = @_;
+    local $plierwszy;
+        
+    open (PLIK, "<$plikodl") or die ("B³±d krytyczny, nie mogê sie dobraæ do $plikodl\n");
+    $pierwszy = <PLIK>;
+    chop ($pierwszy);
+    if ($pierwszy eq $jaki) {
+	close (PLIK);
+	return ($pierwszy);
+	}
+	
+    # a mo¿e ju¿ gdzie¶ jest akurat od³o¿ony? :)	
+    while (<PLIK>) {
+	chop;
+	if ($_ eq $jaki) {
+	    close (PLIK);
+	    return ($jaki);
+	    }
+	}
+    close (PLIK);
+    
+    return ($pierwszy);
+}
+
+# Sprawdza w s³ownikach znajduje siê podany wyraz.
+# Uwaga: musz± byæ posortowane!
+#
+
+sub czyjest {
+    local ($wyraz, $baza_surowa) = @_;
+    local @wyr = ();
+    local @tab = ();
+    local $ty, $dlg, $pierw, $ttt, $linia;
+    
+    $linia = 1;
+    open (PLIK, "<$baza_surowa") or die ("Nie mogê otworzyæ $baza_surowa");
+    
+    $ttt = $wyraz;
+    if ($wyraz !~ s/(.*\/).*/$1/) {
+	$wyraz = $ttt;
+	}
+    
+    @wyr = split ('', $wyraz);
+    $dlg = length (@wyr);
+    $pierw = $dlg;
+    
+    while ($aktu = <PLIK>) {
+	chomp;
+	$linia++;
+	$ttt = $aktu;
+	if ($aktu !~ s/(.*\/).*/$1/) {
+	    $aktu = $ttt;
+	    }
+	@tab = split ('', $aktu);
+	if (length (tab) != $dlg) {
+	    next;
+	    }
+	foreach $ty (@tab) {
+	    foreach (@wyr) {
+	    	if ($_ eq $ty) {
+		    $dlg--;
+		    if (!$dlg) {
+			return ($ttt);
+			}
+		    else {
+			if ($_ lt $ty) {
+			    $dlg = $pierw;
+			    next $aktu;
+			    }
+			else {
+			    return (0);
+			    }
+			}
+		    }
+		}
+	    }
+	}
+    close (PLIK);
+    return (0);
+    }
+
+# Sprawdza czy zmieni³ siê podany s³ownik.
+#
+sub zmieniony {
+    local ($aktu, $katinfo, $pldict) = @_;
+    local $czas, $rozmiar, $wlplik;
+    local %statystyka = ();
+    
+    $wlplik = "$pldict/$aktu";
+    
+    $rozmiar = (stat($wlplik))[7];
+    $czas = (stat($wlplik))[9];
+    
+    # print "\nPlik $wlplik ; czas = $czas ; rozmiar = $rozmiar\nInfo w $katinfo/$aktu\n";
+	
+    if ( ! open (PLIKINFO, "<$katinfo/$aktu") ) {
+        $statystyka{'czas'} = $czas;
+        $statystyka{'rozmiar'} = $rozmiar;
+        &zachowaj_zmiany ("$katinfo/$aktu", %statystyka);
+	return (1);
+        }
+    
+    chop ($statystyka{'czas'} = <PLIKINFO>);
+    chop ($statystyka{'rozmiar'} = <PLIKINFO>);
+    if ($statystyka{'czas'} != $czas or $statystyka{'rozmiar'} != $rozmiar) {
+	close (PLIKINFO);	
+	return (1);
+	}
+    
+    close (PLIKINFO);
+    return (0);
+    }
+
+# Generuje listê plików dla danego katalogu.
+#
+sub dajpliki {
+    local($katalog) = @_;
+    local @wynik = ();
+
+    opendir(DIR, $katalog) or die "Nie powiód³ siê opendir $katalog: $!";
+    @wynik = grep { /^[^\.]/ && -f "$katalog/$_"} readdir(DIR);
+    closedir DIR;
+    
+    return @wynik;
+}
+
+# Sprawdza duplikaty dla niedok³adnie podanej nazwy.
+#
+sub sprduplik {
+    local ($peel, $nazwa, @submany) = @_;
+    local @lista = ();
+    local @pliki = ();
+    
+    foreach (@submany) {
+	@pliki = &dajpliki ("$peel/man1");
+	}
+    return @pliki;
+    }
+
+#
+# "main"
+#		  
+
+print "Manspell v.0.18 (GPL) by P.Wilk <siewca\@dione.ids.pl>\n";
+
+if (! -d "$PLDICT/CVS" || ! -f "$PLDICT/aktualne.slowniki")
+	{
+	if ("$PLALTERNATE" ne "")
+	    {
+	    $PLDICT = "$PLALTERNATE";
+	    $PLPL = "$PLDICT/../pl_PL";
+	    $SLOWNIKI_BAZA_CVS = "$PLDICT/aktualne.slowniki";
+	    $AFFIX_CVS = "$PLDICT/polish.aff";
+	    $PERSONAL_CVS = "$PLDICT/osobisty";
+	    $SPRAWDZANE_CVS = "$PLPL/zasoby/ispell.sprawdzane";
+	    $ROBOTNICY = "$PLPL/zasoby/robotnicy";
+	    $QNIQ_CVS = "$PLDICT/tools/qniq/qniq.c";
+	    $IUNIQ_CVS = "$PLDICT/tools/skrypty/iuniq.pl";
+	    $GOTOWA_BAZA = "$KATALOG_ISPELL/PTM.hash";
+	    $KAT_INFO = "$KATALOG_ISPELL/cvsinfo";
+	    $KAT_PRE = "$KATALOG_ISPELL/cvsinfo/pre";
+	    $KAT_INFO = "$KATALOG_ISPELL/cvsinfo";
+	    $POSTPONED = "$KAT_INFO/niedokonczone";
+	    $SLOWNIKI_GLOBALNE = "$KAT_INFO/nazwy_glob";
+	    $QNIQ_INFO = "$KAT_INFO/INFO-qniq";
+	    $QNIQ = "$KATALOG_ISPELL/qniq";
+	    }
+	else
+	    {
+	    print "\nUWAGA!\nObecna wersja programu przystosowana jest do pracy\nbezpo¶rednio z poziomu katalogu CVS.\
+Je¶li chcesz u¿ywaæ jej z tej lokacji musisz ustawiæ zmienn± ¶rodowiskow± PTM_DICT_DIR,\nwskazuj±c± na po³o¿enie katalogu pl_DICT z CVS-u.\
+Na przyk³ad: export PTM_DICT_DIR=\"\$HOME/cvs/pl_DICT\"\n";
+	    exit (1);
+	    }
+	}
+
+if (! -d "$PLPL/CVS" || ! -d "$PLPL/zasoby" || ! -f "$PLPL/FAQ")
+	{
+	if ("$PLPLALTERNATE" ne "")
+	    {
+	    $PLPL = "$PLPLALTERNATE";
+	    $SPRAWDZANE_CVS = "$PLPL/zasoby/ispell.sprawdzane";
+	    $ROBOTNICY = "$PLPL/zasoby/robotnicy";
+	    }
+	else
+	    {
+	    print "\nUWAGA!\nObecna wersja programu przystosowana jest do pracy\nbezpo¶rednio z poziomu katalogu CVS.\
+Je¶li chcesz u¿ywaæ jej z tej lokacji musisz ustawiæ zmienn± ¶rodowiskow± PTM_PL_DIR,\nwskazuj±c± na po³o¿enie katalogu pl_PL z CVS-u.\
+Na przyk³ad: export PTM_PL_DIR=\"\$HOME/cvs/pl_PL\"\n";
+	    exit (1);
+	    }
+	}
+
+if ($EMAIL eq "")
+    {
+    print "Wyeksportuj zmienn± PTM_EMAIL zawieraj±c± twój adres poczty\nelektronicznej identyfikuj±cy ciê w pliku robotnicy\n";
+    exit (1);
+    }
+
+if ($IMIE eq "")
+    {
+    print "Wyeksportuj zmienn± PTM_NAME zawieraj±c± twoje imiê i nazwisko,\ntakie jak identyfikuj±ce ciê w pliku robotnicy\n";
+    exit (1);
+    }
+print "\nU¿ytkownik: $IMIE <$EMAIL>\n";
+#print "Masz ju¿ na koncie $PRZET przet³umaczonych podrêczników.\n";
+
+$arg = @ARGV[0];
+
+if ( ! -d $KATALOG_ISPELL) {
+    mkdir ($KATALOG_ISPELL, 0765) or die ("Nie mogê odczytaæ ani utworzyæ katalogu $KATALOG_ISPELL");
+    }
+if ( ! -d $KAT_INFO) {
+    mkdir ($KAT_INFO, 0765) or die ("Nie mogê odczytaæ ani utworzyæ katalogu $KAT_INFO");
+    }
+if ( ! -d $KAT_PRE) {
+    mkdir ($KAT_PRE, 0765) or die ("Nie mogê odczytaæ ani utworzyæ katalogu $KAT_INFO");
+    }
+
+######## sprawdzamy czy co¶ siê zmieni³o
+
+@SLOWNIKI_CVS = ();
+%SLOWNIKI_CALE = &load_slowniki ($SLOWNIKI_BAZA_CVS);
+
+foreach (keys %SLOWNIKI_CALE) {
+    push (@SLOWNIKI_CVS, $_);
+    }
+
+&qniq ($QNIQ_CVS, $QNIQ_INFO, $QNIQ);
+
+######## specjalna opcja przygotowuj±ca s³owniki do wys³ania via CVS
+
+if ($arg eq "--cvs") {
+    # $bylozmien = 0;
+    print "Przygotowujê s³owniki do dystrybucji...\n\n";
+    print "Zmiana?\n";
+    foreach $obecny (keys %SLOWNIKI_CALE) {
+	# czy wymaga rekompilacji?
+	if (!&zmieniony($obecny, $KAT_PRE, $PLDICT)) {
+	    # $bylozmien = 1;
+	    print "\t -- $SLOWNIKI_CALE{$obecny}\n";
+	    next;
+	    }
+	print "<*>\t -- $SLOWNIKI_CALE{$obecny}\n";
+	system ("cd $PLDICT ; cat $obecny | sort | $QNIQ > $obecny.prep");
+	unlink ("$PLDICT/$obecny");
+	system ("cd $PLDICT ; mv $obecny.prep $obecny");
+	&zachowaj_zmiany ("$KAT_PRE/$obecny", ("rozmiar", ((stat("$PLDICT/$obecny"))[7]), "czas",((stat("$PLDICT/$obecny"))[9])));
+	}
+    # if ($bylozmien) {
+    #	&check_globalne ($SLOWNIKI_GLOBALNE, $KAT_INFO, $GOTOWA_BAZA, $AFFIX_CVS, %SLOWNIKI_CALE);
+    #	&check_baza ($KAT_INFO, $PLDICT, $GOTOWA_BAZA, @SLOWNIKI_CVS);
+    #	&check_osobisty ($KAT_INFO, $PERSONAL_CVS);
+    #	}
+    print "\nZrobione!\n";
+    exit (0);
+    }
+
+&check_globalne ($SLOWNIKI_GLOBALNE, $KAT_INFO, $GOTOWA_BAZA, $AFFIX_CVS, %SLOWNIKI_CALE);
+&check_baza ($KAT_INFO, $PLDICT, $GOTOWA_BAZA, @SLOWNIKI_CVS);
+&check_osobisty ($KAT_INFO, $PERSONAL_CVS);
+
+######## tylko sprawdzenie czy wyraz wystêpuje
+
+if ($arg eq "--check" and @ARGV[1]) {
+    system ("echo @ARGV[1] | ispell -d $GOTOWA_BAZA -p $PERSONAL_CVS -l");
+    exit (0);
+    }
+
+######## tylko przebudowanie bazy z pozostawieniem surowego zbioru s³ów
+
+if ($arg eq "--rebuild-only") {
+    exit (0);
+    }
+
+######## je¶li co¶ od³o¿yli¶my to przywróæ, gdy nie podano nazwy...
+
+if (! $arg and -f "$POSTPONED" and (stat("$POSTPONED"))[7] > 2) {
+    $arg = &getpostponed ($POSTPONED, "");
+    print "Brak nazwy, zak³adam, ¿e chodzi o pierwszy od³o¿ony: $arg\n";
+    sleep (3);
+    }
+
+######## praca interaktywna :)
+
+if ($arg) {
+    if ($arg =~ /.*\/.*/) {
+	print STDERR "Nie podawaj ¶cie¿ki - wystarczy sama nazwa pliku, np.: ./manspell ac.1\n";
+	exit (1);
+	}
+    $sekcja = substr ($arg, (rindex ("$arg", "."))+1);
+    if (length($sekcja) == length($arg)) {
+	print STDERR "Nie mogê wy³uskaæ sekcji w jakiej znajduje siê podany plik.\n";
+	print STDERR "Sprawdzam czy wystêpuj± duplikaty...\n";
+	@duplikaty = &sprduplik($PLPL,$arg,@SUBMANY);
+	if (@duplikaty) {
+	    print STDERR "Znalazlem powielaj±ce siê podrêczniki, pasuj±ce do podanej nazwy:\n\n";
+	    foreach (@duplikaty) {
+		print "$_\n";
+		}
+	    print STDERR "Proszê wyspecyfikuj w³a¶ciwy...";
+	    }
+	
+	exit (1);
+	}
+    
+    $nazwapliku = "$PLPL/man$sekcja/$arg";
+    print ("\nPe³na nazwa ¶cie¿kowa: $nazwapliku\n");
+    if ( ! -f "$nazwapliku" ) {
+	print STDERR "Podany plik nie nale¿y do modu³u pl_PL.\n";
+	exit (1);
+	}
+
+######## backup pliku z od³o¿onymi (jakby nam siê sprawdzanie odwidzia³o)
+
+if ( -f "$POSTPONED.bak") {
+    unlink ("$POSTPONED.bak");
+    }
+
+if (! -f "$POSTPONED") {
+	system ("touch $POSTPONED");
+	}
+
+system ("cp $POSTPONED $POSTPONED.bak");
+
+######## sprawdzanie od³o¿onych
+
+    $WZIETO_ODL = 0;
+    $odlozony = &getpostponed ($POSTPONED, $arg);
+    if ($odlozony eq $arg) {
+	&unpostpone ($POSTPONED, $arg);
+	$WZIETO_ODL = 1;
+	} 
+    elsif ($odlozony) {
+	print "\nUwaga: Czeka od³o¿ony podrêcznik: $odlozony\n\n1 -- bierzesz $odlozony\n2 -- bierzesz $arg\n\n";
+	$guzik = 0;
+	while ($guzik ne "1" and $guzik ne "2") {
+	    $guzik = &wybieranie;
+	    }
+	if ($guzik eq "1") {
+	    $arg = $odlozony;
+	    &unpostpone ($POSTPONED, $arg);
+	    }
+	}
+	
+######## sprawdzanie rezerwacji
+	
+    $wlasciciel = &rezerwacja ($SPRAWDZANE_CVS, $arg);
+    if (! $wlasciciel) {
+	print <<EOFMSG;
+	
+    Podany plik nale¿y do zasobów pl_PL, ale nie jest jeszcze przez nikogo
+    zarezerwowany do sprawdzania. Masz dwie mo¿liwo¶ci:
+    
+    1 -- Rezerwujesz go dla siebie i zaczynasz sprawdzaæ.
+    2 -- Zostawiasz w spokoju.
+    
+EOFMSG
+	$guzik = 0;
+	while ($guzik ne "1" and $guzik ne "2") {
+	    $guzik = &wybieranie;
+	    }
+	if ($guzik eq "2") {
+	    print "Jest a¿ tak pó¼no??? ;)\n";
+	    if ( -f "$PERSONAL_CVS.bak") {	# na wszelki wypadek
+		unlink ("$PERSONAL_CVS.bak");
+		}
+	    if ( -f "$POSTPONED.bak") { # nie mo¿e byæ sytuacji, ¿e jest od³o¿ony
+		unlink ("$POSTPONED.bak"); # a nie jest zarezerwowany.
+		}
+	    exit (0);
+	    }
+	# rezerwacja
+	$tag = &ktoto ($SPRAWDZANE_CVS, $EMAIL);
+	if (! $tag) {
+	    $tag = &ktoto ($ROBOTNICY, $EMAIL);
+	    }
+	if (! $tag) {
+	    print "Nie znalaz³em wpisu, który identyfikowa³by Ciê w pliku z rezerwacjami...\n";
+	    # /PW/Pawe³ Wilk <siewca@dione.ids.pl>
+	    if ($IMIE =~ /(\S)[^\t\s]*[\t\s](\S)[^\t\s]*/) {
+		$inicjaly = "$1$2";
+		}
+	    $tag = "/$inicjaly/$IMIE <$EMAIL>";
+	    print "Proponujê dodanie Ciê jako: $tag\nCzy zgadzasz siê? (t/n): ";
+	    $guzik = 0;
+	    while ($guzik ne "t" and $guzik ne "n") {
+		$guzik = &wybieranie;
+		}
+	    if ($guzik eq "t") {
+		&dopisz ($tag, $arg, $SPRAWDZANE_CVS);
+		}
+	    else {
+		unlink ("$POSTPONED.bak");
+		exit (0);
+		}
+	    }
+	dopisz ($tag, $arg, $SPRAWDZANE_CVS);
+	}
+    else {
+	$email = &daj_email ($wlasciciel);
+	if ($email ne $EMAIL) {
+	    print <<EOFMSG;
+
+Plik, który upatrzy³e¶ sobie do sprawdzenia jest ju¿ zarezerwowany
+przez kogo¶ innego. Jakby co to podajê namiary:
+
+EOFMSG
+	    $imienaz = &daj_nazw ($wlasciciel);
+	    print ("\t$imienaz <$email>\n\n");
+	    print ("Pamiêtaj... STOP PRZEMOCY ;->\n");
+	    exit (0);
+	    }
+	elsif ($WZIETO_ODL == 0) {
+	    print <<EOFMSG;
+
+Plik, który chcesz sprawdzaæ by³ ju¿ przez Ciebie edytowany.
+Nie widzê ¿adnych ¶ladów od³o¿enia tego pliku dlatego pytam...
+
+EOFMSG
+	    $guzik = 0;
+	    while ($guzik ne "t" and $guzik ne "n") {
+		print ("Czy na pewno chcesz go sprawdzaæ? (t/n)\n");
+		$guzik = &wybieranie;
+		}
+	    if ($guzik eq "n") {
+		exit (0);
+		}
+	    }
+	# ok, mamy ju¿ zarezerwowane :)
+	}
+    
+    if ( -f "$PERSONAL_CVS.bak") {
+	    unlink ("$PERSONAL_CVS.bak");
+	    }
+	    
+    system ("cp $PERSONAL_CVS $PERSONAL_CVS.bak");
+    $rc = 0xffff & system ("ispell -b -n -d $GOTOWA_BAZA -p $PERSONAL_CVS $nazwapliku");
+    if ($rc == 0) {
+	print "Ispell poprawnie zakoñczy³ pracê.\n";
+	}
+    else {
+	print STDERR "Niezerowy kod wyj¶cia z wywo³ania ispell.\n";
+	print STDERR "Cofniête wszystkie zmiany.\n";
+	if ( -f "$POSTPONED.bak") {
+	    unlink ("$POSTPONED");
+	    system ("cp $POSTPONED.bak $POSTPONED");
+	    }
+	if (-f "$SPRAWDZANE_CVS.temp") {
+	    unlink ("$SPRAWDZANE_CVS.temp");
+	    }
+	if (-f "$nazwapliku.bak") {
+	    unlink ("$nazwapliku");
+	    rename ("$nazwapliku.bak", "$nazwapliku");
+	    }
+	if ( -f "$PERSONAL_CVS.bak") {
+	    unlink ("$PERSONAL_CVS");
+	    rename ("$PERSONAL_CVS.bak", "$PERSONAL_CVS");
+	    }
+	exit (1);
+	}
+    print <<EOFMSG;
+    
+Skoñczy³e¶ sprawdzaæ podrêcznik, mo¿esz wiêc:
+
+1 -- zachowaæ zmiany (uznamy, ¿e podrêcznik jest ju¿ sprawdzony).
+2 -- zrezygnowaæ z poczynionych zmian (odtwarza star± zawarto¶æ plików).
+3 -- zachowaæ tylko sprawdzony podrêcznik, ale bez dodawania s³ówek do s³ownika.
+4 -- od³o¿yæ sprawdzanie na potem (zmiany zachowane, ale w³±czony przypominacz).
+
+EOFMSG
+
+    $guzik = 0;
+    while ($guzik !~ /[1234]/) {
+	$guzik = &wybieranie;
+	}
+
+############## opcja 2
+
+    if ($guzik eq "2") {
+	if ( -f "$POSTPONED.bak") {
+	    unlink ("$POSTPONED");
+	    system ("cp $POSTPONED.bak $POSTPONED");
+	    }
+	if (-f "$nazwapliku.bak") {
+	    unlink ("$nazwapliku");
+	    rename ("$nazwapliku.bak", "$nazwapliku");
+	    }
+	if ( -f "$PERSONAL_CVS.bak") {
+	    unlink ("$PERSONAL_CVS");
+	    rename ("$PERSONAL_CVS.bak", "$PERSONAL_CVS");
+	    }
+	
+	if ( -f "$SPRAWDZANE_CVS.temp") {
+	    $guzik = 0;
+	    while ($guzik ne "1" and $guzik ne "2") {
+		print "Uwaga! Rezygnujesz ze zmian, ale zarezerwowa³e¶ podrêcznik.\nCzy podtrzymujesz swoj± decyzjê w sprawie jego rezerwacji?\n1 -- Tak.\n2 -- Nie.\n";
+		$guzik = &wybieranie;
+		}
+	    
+	    if ($guzik eq "2") {
+		unlink ("$SPRAWDZANE_CVS.temp");
+		}
+	    else {
+		if ( -f "$SPRAWDZANE_CVS") {
+		    unlink ("$SPRAWDZANE_CVS");
+		    }
+		rename ("$SPRAWDZANE_CVS.temp", "$SPRAWDZANE_CVS");
+		}
+	    }
+	    
+	print "Zmiany nie zosta³y zatwierdzone.\n";
+	exit (0);	
+	} 
+
+############## opcja 1 lub 3 lub 4
+	
+    if ($guzik eq "3" or $guzik eq "1" or $guzik eq "4") {
+	if ( -f "$nazwapliku.bak") {
+	    unlink ("$nazwapliku.bak");
+	    }
+	if ( -f "$POSTPONED.bak") {
+	    unlink ("$POSTPONED.bak");
+	    }
+	if (-f "$SPRAWDZANE_CVS.temp") {
+	    unlink ("$SPRAWDZANE_CVS");
+	    rename ("$SPRAWDZANE_CVS.temp", "$SPRAWDZANE_CVS");
+	    }
+	if ( -f "$PERSONAL_CVS.bak") {
+	    unlink ("$PERSONAL_CVS.bak");
+	    }
+	}
+
+############## opcja 1
+	    
+    if ($guzik eq "1") {
+	if ( -f "$PERSONAL_CVS.bak") {
+	    unlink ("$PERSONAL_CVS.bak");
+	    }
+	}
+
+############## opcja 3
+	
+    if ($guzik eq "3") {
+	if ( -f "$PERSONAL_CVS.bak") {
+	    unlink ("$PERSONAL_CVS");
+	    rename ("$PERSONAL_CVS.bak", "$PERSONAL_CVS");
+	    }
+	}
+
+############## opcja 4
+	
+    if ($guzik eq "4") {
+	postpone_porecznik ($POSTPONED, $arg);
+	} 
+	
+############## The End. :-)
+	
+    print "Mi³ego Dzionka! :-)\n";
+    exit (0);
+    }
+else 
+    {
+    print STDERR "U¿ycie: manspell plik\n";
+    exit (0);
+    }

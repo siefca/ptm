@@ -1,0 +1,465 @@
+#!/usr/bin/perl
+
+# Miroslaw.Prywata@fuw.edu.pl
+# Skrypt s³u¿±cy do weryfikacji flag przydzielonych poszczególnym s³owom
+#   wersja 990522
+# Pawe³ Wilk <siewca@pld.org.pl>
+# Modyfikacje: przystosowanie do pracy ze zbiorami PLD-CVS 
+#   wersja 990611
+#
+# U¿ywany jest przez osoby pomagaj±ce w tworzeniu s³ownika. Sposób u¿ycia:
+#  sprawdz plik_ze_s³owami_którym_zamierzamy_nadaæ/sprawdziæ_flagi
+# Wcze¶niej nale¿y wykonaæ skrypt ./przygotuj.do.pracy
+# 
+# Skrypt ma u³atwiæ flagowanie pozwalaj±c od razu obejrzeæ jaki efekt
+# przyniesie do³o¿enie danej flagi do s³owa. Istnieje te¿ mo¿liwo¶æ
+# dodania hurtem wszystkich flag dla danej czê¶ci mowy. Skrypt dzia³a
+# w oparciu o plik z regu³ami polish.aff i nie ma ¿adnych przeciwskazañ, by
+# u¿ywaæ go z plikami z dowolnymi regu³ami.
+# 
+# DLA OSÓB CHC¡CYCH DO£O¯YÆ JAKIE¦ S£OWA DO S£OWNIKA (utworzyæ s³ownik fachowy):
+# Zalecana procedura:
+#  - dodajemy nieznane s³owa do pliku .ispell_polish (podczas sprawdzania pisownii)
+#  - przegl±damy plik .ispell_polish i zamieniamy wszystkie wyst±pienia 
+#    na formy podstawowe (patrz README)
+#  - umieszczamy je w osobnym pliku (z flagami lub bez) i uruchamiamy
+#    skrypt sprawdz
+#  - po przej¶ciu ca³ego pliku i nadaniu flag otrzymujemy gotowy fragment 
+#    s³ownika, który mo¿emy do³±czyæ do s³ownika g³ównego
+#  
+#  Poniewa¿ nad s³ownikiem ci±gle trwaj± prace, wiêc a¿eby unikn±æ podwójnego
+#  sprawdzania tych samych form proponujê skontaktowaæ siê najpierw ze mn±.
+#
+#  PLIK polish.aff powinien byæ zawsze w najnowszej wersji dostêpnej na ftp
+#  s³ownika
+#
+
+# Katalog domowy. Zmieñ tylko wtedy, gdy nie masz ustawionej zmiennej
+# ¶rodowiskowej HOME.
+
+$HOMEDIR = $ENV{HOME};
+
+
+$PL_DICT = "../..";
+$AKTYWNE = "$PL_DICT/aktualne.slowniki";
+$MANSPELL = "$PL_DICT/manspell";
+
+# Tu ¶cie¿ka dostêpu do prywatnego katalogu ispell. 
+# Potrzebujemy go by przechowywaæ tam plik skompilowanej ju¿ bazy s³ów, 
+# któr± rozumie ispell. 
+# Uwaga: je¶li nie istnieje to jest tworzony automatycznie.
+#
+$KATALOG_ISPELL = "$HOMEDIR/ispell";	# uwaga: bez koñcz±cego znaku uko¶nika!
+
+# Nazwa skryptu iuniq z CVS
+#
+$IUNIQ_CVS = "$PL_DICT/tools/skrypty/iuniq.pl";
+
+# Nazwa wynikowego zbioru qniq
+#
+$QNIQ = "$KATALOG_ISPELL/qniq";
+
+
+@POMIJANE = ("A", "B", "C", "DOMAIN", "CTRS");
+
+sub load_slowniki {
+    local ($baza, @pomijane) = @_;
+    local %slowniczki = ();
+    local $tymcz, $q;
+    
+    open (PLIK, "<$baza") or die ("Nie mogê pobraæ informacji o s³ownikach z $baza");
+JRZ: while (<PLIK>) {
+	chop;
+	if (!$_ or $_ =~ /^(\#|\/|\s|\t)/) {
+	    next;
+	    }
+	if ($_ =~ /(\w+\t|\s|\/)(.*)/) {
+	    $tymcz = $1;
+	    chop ($tymcz);
+	    foreach $q (@pomijane) {
+		if ($tymcz eq $q) {
+		    goto JRZ;
+		    }
+		}
+	    $slowniczki{$tymcz} = $2;
+	    }
+    }
+    close (PLIK);
+    return (%slowniczki);
+}
+
+
+sub zapytaj_gdzie {
+    local ($slowo, %slowniki) = @_;
+    local $x = 0; 
+    local $p, $d;
+    local $l = keys (%slowniki);
+    local @indeksiki = keys (%slowniki);
+    local @loaded = ();
+    
+    system ("clear");
+    print "S£OWO: $slowo\n";
+    print "Zaznacz s³owniki, do których zapiszemy wyraz (ENTER zatwierdza)\n";
+    
+    foreach (keys(%slowniki)) {
+	print "[$x] ---  ($_) $slowniki{$_}\n";
+	$x++;
+	}
+    
+    while (<STDIN>) {
+    	chop;
+	if ($_ eq "") {
+	    last;
+	    }
+	$p = $indeksiki["$_"];
+	
+	$x = 0;
+	foreach $d (@loaded) {
+		if ($d eq $p) {
+		    $loaded[$x] = "";
+		    $p = "";
+		    last;
+		    }
+		$x++;
+		}
+		
+	push (@loaded, $p);
+		
+	$x = 0;
+	system ("clear");
+	print "S£OWO: $slowo\n";
+	print "Zaznacz s³owniki, do których zapiszemy wyraz (ENTER zatwierdza)\n";
+NAJ:	foreach $p (keys %slowniki) {
+	    foreach $d (@loaded) {
+		if ($p eq $d) {
+		    print "[$x] -*-  ($d) $slowniki{$d}\n";
+		    $x++;
+		    next NAJ;
+		    }
+		}
+	    print "[$x] ---  ($p) $slowniki{$p}\n";    
+	    $x++;
+	    }
+	}
+    
+    return (@loaded);
+    }
+    
+sub puttodict {
+    local ($katalog, $slowo, @dojakich) = @_;
+    
+    foreach (@dojakich) {
+	if ($_ eq "") {
+	    next;
+	    }
+	open (PLK, ">>$katalog/$_") or print "Nie mog³em zapisaæ do $katalog/$_\n";
+	print PLK "$slowo\n";
+	close (PLK);
+	}
+    }
+
+open (RES, ">/tmp/res.slowa.tmp") or die;
+close RES;
+
+sub przeszukaj {
+    local ($qniq, $katalog, $slowo, @slowniki) = @_;
+    local @trafione = ();
+    local @rezultat = ();
+    local $s = "", $sl = "", $fl = "";
+    local $x = 1;
+    local $wynik;
+    
+    print "\nLista trafieñ:\n";
+    
+    foreach $s (@slowniki) {
+	open (PLZ, "<$katalog/$s") or die;
+    
+CZYTPLIK: while ($t = <PLZ>) {
+	    $t =~ /^([\wêó±¶³¿¼æñÊÓ¡¦£¯¬ÆÑ]+)\/(\w+)/;
+	    $sl = $1;
+	    $fl = "\/$2";
+	    if ($sl eq ""){
+		$t =~ /^([\wêó±¶³¿¼æñÊÓ¡¦£¯¬ÆÑ]+)/;
+		$sl = $1;$fl ="";
+		}
+	    if ($sl ne $slowo) {
+		next CZYTPLIK;
+		}
+	    open (RES, ">>/tmp/res.slowa.tmp") or die;
+	    print (RES "$slowo$fl\n");
+	    close RES;
+	    print " - $slowo$fl (w s³owniku $s)\n";
+	    }
+	close PLZ;
+	}
+    close RES;
+    
+    print "\nPo³±czone wyniki: ";
+    system ("cat /tmp/res.slowa.tmp | sort | $QNIQ > /tmp/res.slowa.tmp2");
+    open (RES, "</tmp/res.slowa.tmp2");
+    while (<RES>) {
+	chop;
+	$wynik = $_;
+	print "\n$x.) $_";
+	push (@trafione, $_);
+	$x++;
+	}
+    
+    $x--;
+    if ($x < 1) {
+	print "(brak)\n";
+	}
+    else {
+	print "\n";
+	}
+    close (RES);
+    unlink ("/tmp/res.slowa.tmp");
+    unlink ("/tmp/res.slowa.tmp2");
+    print "\n";
+    
+    if ($x > 1) {
+	print "Niektórych flag nie mo¿na ³±czyæ, dlatego widzisz teraz wiêcej ni¿ jeden\nrezultat. Wytypuj w³a¶ciwy...\n";
+	print ">> ";
+	while (<STDIN>)
+	    {
+	    chop;
+	    $x = $_ - 1;
+	    $wynik = "$trafione[$x]";
+	    if ($wynik) {
+		last;
+		}
+	    print ">> ";
+	    }
+	}
+	
+    $wynik =~ /^([\wêó±¶³¿¼æñÊÓ¡¦£¯¬ÆÑ]+)\/(\w+)/;
+        $sl = $1;
+        $fl = "\/$2";
+        if ($sl eq ""){
+	    $wynik =~ /^([\wêó±¶³¿¼æñÊÓ¡¦£¯¬ÆÑ]+)/;
+	    $sl = $1;$fl ="";
+	    }
+    @rezultat = ($sl, $fl);
+    return (@rezultat);
+    }
+
+sub odmien1 {
+    print "Kolejny wyraz to: $wyraz$flaga\n";
+    print "\n----------------------------------------------------------\n";
+    if( $flaga =~ s/a// ) { $a = 'a';} else {$a ='';}
+    if( $flaga =~ s/b// ) { $b = 'b';} else {$a ='';}
+    if( $flaga =~ s/c// ) { $c = 'c';} else {$a ='';}
+    if( $flaga =~ s/d// ) { $d = 'd';} else {$a ='';}
+    if( $flaga =~ s/e// ) { $e = 'e';} else {$a ='';}
+    $flaga_tmp = $flaga;
+    $flaga_tmp =~ s/\///;
+    $flaga_tmp =~ s/^/ /;
+    @flagi = split('',$flaga_tmp);
+    $tmp = join("\n$wyraz\/$a$b$c$d$e", @flagi);
+    open(ISPELL,'|ispell -d ./slowo.hash -e2');
+    print ISPELL $tmp;
+    close(ISPELL);
+    print "----------------------------------------------------------\n";
+}
+
+sub odmien2 {
+        print "$wyraz$flaga\n------------------------------\n";
+        $flaga_tmp = $flaga;
+        $flaga_tmp =~ s/\///;
+        $flaga_tmp =~ s/^/ /;
+        @flagi = split('',$flaga_tmp);
+        $tmp = join("\n$wyraz\/", @flagi);
+        open(ISPELL,'|ispell -d ./slowo.hash -e2');
+        print ISPELL $tmp;
+        close(ISPELL);
+}
+
+
+print "Program do dodawania s³ów do s³ownika polskiego.\n";
+if($ARGV[0] eq ''){
+    die "sprawdz nazwa.pliku.ze.slowami.do.sprawdzenia\n";
+}
+
+if (! -f $QNIQ) {
+    system ("$MANSPELL neverhappend.66");
+    }
+
+if (! -f $QNIQ) {
+    $QNIQ = $IUNIQ_CVS;
+    }
+
+print "£adujê informacje o s³ownikach globalnych...\n";
+
+%GLOBALNE = &load_slowniki ($AKTYWNE, @POMIJANE);
+@WSZYSTKIE = keys (%GLOBALNE);
+
+push (@WSZYSTKIE, @POMIJANE);
+
+print "Otwieram plik s³ownikowy:$ARGV[0]\n";
+open (SLOWNIK_IN,"<$ARGV[0]") or die "Nie ma pliku $ARGV[0]\n";
+open (SLOWNIK_TRASH,">>$ARGV[0].trash") or die "Nie mog³em otworzyæ $ARGV[0].trash\n";
+
+
+$NIEWIEM = "nie_wiem";
+$SPRAWDZONE = "sprawdzone";
+print "Otwieram plik: $NIEWIEM\n";
+open (SL_NIEWIEM, ">>$NIEWIEM") or die "Nie mog³em otworzyæ pliku $NIEWIEM\n";
+print "Otwieram plik: $SPRAWDZONE\n";
+open (SPRAWDZONE, ">>$SPRAWDZONE") or die "Nie mog³em otworzyæ pliku $SPRAWDZONE\n";
+
+sleep (1);
+
+while (<SLOWNIK_IN>){
+    /^([\wêó±¶³¿¼æñÊÓ¡¦£¯¬ÆÑ]+)\/(\w+)/;
+    $wyraz = $1;
+    $flaga = "\/$2";
+    if ($wyraz eq ""){
+	/^([\wêó±¶³¿¼æñÊÓ¡¦£¯¬ÆÑ]+)/;
+	$wyraz = $1;$flaga ="";
+	}
+ PYTANIE:
+    system ('clear');
+    &odmien2;
+    print "(0) bez zmian - nastêpne s³owo;\n";
+    print "(1) zmieniæ flagê; (2) dodaæ flagê(i); (3) skasowaæ flagê;\n";
+    print "(4) nie dodawaæ; (5) zdecydujê pó¼niej -> wrzuciæ do $NIEWIEM\n"; 
+    print "(d) dopisaæ s³owo do wytypowanych s³owników globalnych\n";
+    print "(e) zmieniæ s³owo; (c) przeszukaæ s³owniki (k) koniec ?\n";
+    print " Dodaæ wszystkie flagi (6) mêskie (7) czasownikowe\n";
+    $odp = <STDIN>;
+    while( $odp !~ m/[0-7kKDdEeCc]/){ 
+	print "Nie ma takiej opcji, podaj w³a¶ciw± opcjê (0,1,2,3,4,5,6,7,d,e,k,c)\n";
+	$odp =<STDIN>;
+    }
+
+    if ($odp =~ m/0/){
+        print(SPRAWDZONE "$wyraz$flaga\n");
+	goto NASTEPNY;
+    }
+
+    if ($odp =~ m/1/){
+	print "Podaj flagê(i):";
+        $_ = <STDIN>;
+        /^([\w]*)/;
+        $flaga = "\/$1";
+	if ($flaga eq "\/") { $flaga ="";}
+        goto PYTANIE;
+    }
+
+    if ($odp =~ m/2/){
+        print "Podaj flagê(i), któr±(e) chcesz dodaæ.";
+        $_ = <STDIN>;
+	s/[\n\s]//g;
+        if( $flaga eq "") {$flaga ="\/"};
+	$flaga =~ s/\//\/$_/;
+        if ($flaga eq "\/") { $flaga ="";}
+        goto PYTANIE;
+    }
+
+    if ($odp =~ m/3/){
+        print "Chcesz skasowaæ flagê. Któr±?";
+        $_ = <STDIN>;
+        while(s/^(\w)//){
+                $flaga =~ s/$1//;
+        }
+        if ($flaga eq "\/") { $flaga ="";}
+        goto PYTANIE;
+    }
+
+    if ($odp =~ m/4/){
+        print(SLOWNIK_TRASH "$wyraz$flaga\n");
+	goto NASTEPNY
+    }
+
+    if ($odp =~ m/5/){
+        print(SL_NIEWIEM "$wyraz$flaga\n");
+	goto NASTEPNY;
+    }
+
+    if ($odp =~ m/6/){
+        $flaga = "\/DOPQRSTZopqrstuz";
+        goto PYTANIE;
+    }
+
+    if ($odp =~ m/7/){
+        $flaga = "\/BFGHIJghijk";
+        goto PYTANIE;
+    }
+
+    if ($odp =~ m/[kK]/) { 
+	print tutaj;
+	system ("$MANSPELL --cvs");
+	goto KONIEC;
+	}
+    
+    if ($odp =~ m/[dD]/){
+	&puttodict ($PL_DICT, "$wyraz$flaga", &zapytaj_gdzie ($wyraz, %GLOBALNE));
+	print(SPRAWDZONE "$wyraz$flaga\n");
+	goto NASTEPNY;
+	}
+	
+    if ($odp =~ m/[eE]/){
+	system ("clear");
+	print "S³owo: $wyraz\nNowa forma: ";
+	$wyraz = <STDIN>;
+	chop ($wyraz);
+	goto PYTANIE;
+	}
+	
+    if ($odp =~ m/[cC]/){
+	system ("clear");
+	($xwyraz,$xflaga) = &przeszukaj ($QNIQ, $PL_DICT, $wyraz, @WSZYSTKIE);
+	if (! $xwyraz) {
+	    print "\nBrak trafieñ, sorki.. :( Naci¶nij ENTER.";
+	    $xflaga = "";
+	    $odp = <STDIN>;
+	    $odp = "";
+	    goto PYTANIE;
+	    }
+	
+	print "\nPrzeszuka³em s³owniki globalne i znalaz³em szukany wyraz.\nOflagujê go zgodnie z po³±czonymi rezultatami trafieñ.\n";
+	print "Uwaga: obecne flagi zostan± zamazane.\n";
+	print "\nCzy oflagowaæ (t/n)?\n";
+	
+	$odp = <STDIN>;
+	while( $odp !~ m/[tnTN]/){ 
+	    print "Nie ma takiej opcji, podaj w³a¶ciw± (t/n).\n";
+	    $odp =<STDIN>;
+	    }
+	if ($odp =~ m/[Nn]/){
+    	    goto PYTANIE;
+	    }
+	$wyraz = $xwyraz;
+	$flaga = $xflaga;
+	
+	goto PYTANIE;
+    }
+
+  NASTEPNY:
+  $odp = "";
+} 
+
+KONIEC:
+
+if( open (PLIK_TYMCZASOWY, ">>temp.tmp")==NULL){
+	print ("Nie mog³em otworzyæ pliku temp.tmp\n");
+	print("W pliku s³ownikowym zosta³y wszystkie s³owa!!!\n");
+	close SLOWNIK_IN;
+	goto ZAMKNIECIE_PLIKOW;
+    }
+print( PLIK_TYMCZASOWY "$wyraz$flaga\n");
+while(<SLOWNIK_IN>){
+    print( PLIK_TYMCZASOWY "$_");
+}
+
+
+close SLOWNIK_IN;
+rename("temp.tmp",$ARGV[0]);
+
+
+ZAMKNIECIE_PLIKOW:
+
+close SLOWNIK_TRASH;
+close SL_NIEWIEM;
+close SPRAWDZONE;
+

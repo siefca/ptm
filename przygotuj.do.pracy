@@ -1,0 +1,4 @@
+buildhash slowo ../../polish.aff slowo.hash
+rm slowo.cnt
+rm slowo.stat
+./sprawdz slowo
